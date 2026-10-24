@@ -1,0 +1,4 @@
+Subset of github.com/radxa/allwinner-bsp, branch cubie-aiot-v1.5.0, commit 6d5e93b (GPL-2.0),
+limited to the headers imx327_mipi.c includes (list taken from the kbuild dependency file).
+Needed because linux-headers-*-aw2511 do not ship the VIN headers. VIN header ABI checked
+identical to v1.4.8 (see NOTES.md, 2026-10-10).
