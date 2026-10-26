@@ -14,7 +14,7 @@ was developed and measured on one Cubie A7S (4 GB) between 2026-10-10 and
 
 | Sensor | Module tested | Status | Link | Modes (measured, 0 dropped frame) |
 | --- | --- | --- | --- | --- |
-| **IMX327** | Innomaker CAM-MIPI327RAW | ✅ validated | 2 × 891 Mbit/s | 1920×1080 60 fps · 1920×540 112.5 · 1920×480 125 · free height window 1920×h (64 lines: 544 fps) · exposure 1 line … 115 s |
+| **IMX327** | Innomaker CAM-MIPI327RAW | ✅ validated | 2 × 891 Mbit/s | 1920×1080 60 fps · 1920×540 112.5 · 1920×480 125 · free height window 1920×h (64 lines: 544 fps) · exposure 1 line … 115 s · automatic LCG/HCG (×2.535) |
 | IMX462 | — | ⚠️ built, not tested | same driver as IMX327 | same modes as IMX327, gain up to 72 dB |
 | **IMX477** | Raspberry Pi HQ Camera | ✅ validated | 2 × 900 Mbit/s | 4056×3040 · 2028×1520 binned 38.4 · 1916×1080 65.6 · 1920×1080 binned 77.9 · 1276×720 140.8 · 848×480 262.2 · 640×480 binned 446.4 · free ROI (256×128: 804 fps) |
 | **IMX585** | Soho Enterprise IMX585 | ✅ validated | **4** × 891 Mbit/s | 3840×2160 30.0 · 1916×1080 115.4 · 1280×720 191.0 · 640×480 271.4 · binned 1920×1080 68.7 · free ROI (256×128: 710 fps) · automatic LCG/HCG · ClearHDR (12-bit compressed) |

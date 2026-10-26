@@ -31,7 +31,9 @@
  *  - V4L2_CID_ANALOGUE_GAIN: raw register value 0..230, for RAW/astro use
  *    (0..90 = analog up to 27 dB, above that the sensor adds digital gain);
  *  - V4L2_CID_GAIN and VIDIOC_VIN_SENSOR_EXP_GAIN: VIN/ISP convention,
- *    linear Q4 (16 = 1x), converted to the nearest 0.3 dB step.
+ *    linear Q4 (16 = 1x), converted to the nearest 0.3 dB step; effective
+ *    gain, LCG equivalent, with an automatic switch to HCG (parameters hcg,
+ *    hcg_gain, hcg_factor; "HCG Active" control).
  * The last one written wins.
  *
  * TODO before/at bring-up:
@@ -128,6 +130,20 @@ MODULE_LICENSE("GPL");
 #define IMX327_GAIN_REG_MAX	230
 #define IMX327_GAIN_Q4_MAX	(2818 << 4)	/* 10^(69/20) = 2818x */
 #endif
+/*
+ * HCG / LCG sensitivity x1000 at the same gain register (FDG_SEL, 0x3009
+ * bit 4), measured on the module (tools/starvis2/bench.py --sensor imx327
+ * hcg); 0 = unknown: no automatic switch. Overridden by hcg_factor.
+ * IMX327 (Innomaker, 2026-10-26, pixels never saturated): 2.535 at every
+ * register (0..40, +/-0.2 %); gain law exactly 0.3 dB/step. Dark noise at
+ * the same effective gain: HCG about x0.74 (about 26 % less).
+ * IMX462: not measured.
+ */
+#ifdef IMX462
+#define IMX327_HCG_FACTOR_MILLI	0
+#else
+#define IMX327_HCG_FACTOR_MILLI	2535
+#endif
 #define IMX327_HMAX_1080P_2LANE	4400	/* 30 fps at 445.5 Mbit/s/lane */
 #define IMX327_HMAX_1080P_891	2200	/* 60 fps at 891 Mbit/s/lane */
 #define IMX327_HMAX_MAX		0xffff
@@ -149,6 +165,7 @@ MODULE_LICENSE("GPL");
 #define V4L2_CID_IMX327_BASE		(V4L2_CID_USER_BASE + 0x2000)
 #define V4L2_CID_IMX327_CROP_Y		(V4L2_CID_IMX327_BASE + 11)
 #define V4L2_CID_IMX327_ROI_HEIGHT	(V4L2_CID_IMX327_BASE + 13)
+#define V4L2_CID_IMX327_HCG		(V4L2_CID_IMX327_BASE + 6)	/* "HCG Active", read only (RpiCamera3 id) */
 #define IMX327_ROWS		1080	/* rows WINPV can reach (1080p image) */
 #define IMX327_WINWV_MARGIN	13
 #define IMX327_VBLANK_BAND	60
@@ -163,9 +180,25 @@ static uint inck = 74250000;
 module_param(inck, uint, 0444);
 MODULE_PARM_DESC(inck, "Module oscillator / MCLK in Hz: 37125000 or 74250000 (default, as on Minicam)");
 
-static bool hcg_mode;
-module_param(hcg_mode, bool, 0664);
-MODULE_PARM_DESC(hcg_mode, "Enable HCG (high conversion gain) mode, as in Minicam's imx290 driver");
+/*
+ * Conversion gain (FDG_SEL), as the starvis2 driver on the IMX585.
+ * V4L2_CID_GAIN is the effective gain, LCG equivalent: in automatic mode the
+ * driver switches to HCG from hcg_gain on, with gain = effective / HCG
+ * factor, so the image does not jump. Gain and FDG_SEL are written under
+ * REGHOLD (same frame). V4L2_CID_ANALOGUE_GAIN (raw register) keeps the
+ * current conversion gain.
+ */
+static uint hcg = 2;
+module_param(hcg, uint, 0664);
+MODULE_PARM_DESC(hcg, "Conversion gain: 0 = LCG, 1 = HCG, 2 = automatic from hcg_gain when hcg_factor is known (default)");
+
+static uint hcg_gain = 3;
+module_param(hcg_gain, uint, 0664);
+MODULE_PARM_DESC(hcg_gain, "Automatic mode: effective gain (x) from which HCG is used (default 3: HCG register 0 is x2.53 on the IMX327)");
+
+static uint hcg_factor = IMX327_HCG_FACTOR_MILLI;
+module_param(hcg_factor, uint, 0444);
+MODULE_PARM_DESC(hcg_factor, "HCG / LCG sensitivity x1000 measured on the module (0 = unknown, no automatic switch)");
 
 static uint black_level = 240;
 module_param(black_level, uint, 0664);
@@ -344,6 +377,7 @@ static int imx327_write_table(struct v4l2_subdev *sd, struct regval_list *regs,
 static unsigned int imx327_base_vts;	/* VMAX for the requested frame rate */
 static unsigned int imx327_vts;		/* VMAX currently programmed */
 static unsigned int imx327_gain_reg;
+static bool imx327_hcg;		/* FDG_SEL programmed (HCG) */
 
 static unsigned int imx327_hmax = IMX327_HMAX_1080P_2LANE; /* HMAX currently programmed */
 
@@ -485,17 +519,43 @@ static unsigned int imx327_gain_reg_to_q4(unsigned int reg)
 	return (unsigned int)(x >> 6);
 }
 
-static int imx327_write_gain_reg(struct v4l2_subdev *sd, unsigned int reg)
+/* FRSEL part of 0x3009 (shares the register with FDG_SEL) */
+static u8 imx327_frsel(void)
+{
+	return mipi_891 ? IMX327_FRSEL_60FPS : IMX327_FRSEL_30FPS;
+}
+
+/* Gain register and conversion gain, same frame */
+static int imx327_write_gain(struct v4l2_subdev *sd, unsigned int reg, bool high)
 {
 	int ret;
 
 	if (reg > IMX327_GAIN_REG_MAX)
 		reg = IMX327_GAIN_REG_MAX;
-	ret = sensor_write(sd, IMX327_GAIN, reg);
+	ret = sensor_write(sd, IMX327_REGHOLD, 0x01);
+	ret |= sensor_write(sd, IMX327_FR_FDG_SEL, imx327_frsel() | (high ? IMX327_FDG_HCG : 0));
+	ret |= sensor_write(sd, IMX327_GAIN, reg);
+	ret |= sensor_write(sd, IMX327_REGHOLD, 0x00);
 	if (ret)
-		return ret;
+		return -EIO;
 	imx327_gain_reg = reg;
+	imx327_hcg = high;
 	return 0;
+}
+
+static int imx327_write_gain_reg(struct v4l2_subdev *sd, unsigned int reg)
+{
+	return imx327_write_gain(sd, reg, imx327_hcg);
+}
+
+/* Effective gain (Q4, LCG equivalent) of the programmed register and conversion gain */
+static unsigned int imx327_gain_eff_q4(void)
+{
+	unsigned int g = imx327_gain_reg_to_q4(imx327_gain_reg);
+
+	if (imx327_hcg && hcg_factor)
+		g = (unsigned int)div_u64((u64)g * hcg_factor + 500, 1000);
+	return g;
 }
 
 static int sensor_g_gain(struct v4l2_subdev *sd, __s32 *value)
@@ -510,15 +570,19 @@ static int sensor_g_gain(struct v4l2_subdev *sd, __s32 *value)
 static int sensor_s_gain(struct v4l2_subdev *sd, int gain_val)
 {
 	struct sensor_info *info = to_state(sd);
+	unsigned int g = max(gain_val, 16);
+	bool high = hcg == 1 || (hcg == 2 && hcg_factor && g >= hcg_gain << 4);
 	int ret;
 
-	if (gain_val < 16)
-		gain_val = 16;
-	ret = imx327_write_gain_reg(sd, imx327_gain_q4_to_reg(gain_val));
+	if (high && hcg_factor)
+		g = max_t(unsigned int, 16,
+			  div_u64((u64)g * 1000 + hcg_factor / 2, hcg_factor));
+	ret = imx327_write_gain(sd, imx327_gain_q4_to_reg(g), high);
 	if (ret)
 		return ret;
-	info->gain = imx327_gain_reg_to_q4(imx327_gain_reg);
-	sensor_dbg("sensor_set_gain q4 = %d -> reg %u\n", gain_val, imx327_gain_reg);
+	info->gain = imx327_gain_eff_q4();
+	sensor_dbg("sensor_set_gain q4 = %d -> reg %u%s\n", gain_val, imx327_gain_reg,
+		   high ? " HCG" : "");
 	return 0;
 }
 
@@ -530,7 +594,7 @@ static int sensor_s_analogue_gain(struct v4l2_subdev *sd, int reg)
 	ret = imx327_write_gain_reg(sd, reg);
 	if (ret)
 		return ret;
-	info->gain = imx327_gain_reg_to_q4(imx327_gain_reg);
+	info->gain = imx327_gain_eff_q4();
 	return 0;
 }
 
@@ -996,8 +1060,7 @@ static int sensor_reg_init(struct sensor_info *info)
 	sensor_write(sd, IMX327_Y_OUT_SIZE + 1, wsize->height >> 8);
 	imx327_write_window(sd, wsize, false);
 	sensor_write(sd, IMX327_FR_FDG_SEL,
-		     (mipi_891 ? IMX327_FRSEL_60FPS : IMX327_FRSEL_30FPS) |
-		     (hcg_mode ? IMX327_FDG_HCG : 0));
+		     imx327_frsel() | (imx327_hcg ? IMX327_FDG_HCG : 0));
 	sensor_write(sd, IMX327_HMAX_L, hmax & 0xff);
 	sensor_write(sd, IMX327_HMAX_H, (hmax >> 8) & 0xff);
 	sensor_write(sd, IMX327_BLKLEVEL_L, blk & 0xff);
@@ -1081,6 +1144,9 @@ static int sensor_g_ctrl(struct v4l2_ctrl *ctrl)
 	case V4L2_CID_ANALOGUE_GAIN:
 		ctrl->val = imx327_gain_reg;
 		return 0;
+	case V4L2_CID_IMX327_HCG:
+		ctrl->val = imx327_hcg;
+		return 0;
 	}
 	return -EINVAL;
 }
@@ -1119,6 +1185,11 @@ static const struct v4l2_ctrl_ops sensor_ctrl_ops = {
 
 static const struct v4l2_ctrl_config imx327_ctrl_cfgs[] = {
 	{
+		.ops = &sensor_ctrl_ops, .id = V4L2_CID_IMX327_HCG,
+		.name = "HCG Active", .type = V4L2_CTRL_TYPE_BOOLEAN,
+		.min = 0, .max = 1, .step = 1, .def = 0,
+		.flags = V4L2_CTRL_FLAG_READ_ONLY | V4L2_CTRL_FLAG_VOLATILE,
+	}, {
 		.ops = &sensor_ctrl_ops, .id = V4L2_CID_IMX327_CROP_Y,
 		.name = "Crop Y Offset", .type = V4L2_CTRL_TYPE_INTEGER,
 		.min = -IMX327_ROWS, .max = IMX327_ROWS, .step = 1, .def = 0,
@@ -1186,7 +1257,9 @@ static int sensor_init_controls(struct v4l2_subdev *sd, const struct v4l2_ctrl_o
 				 1, (1125 - IMX327_EXPOSURE_OFFSET) << 4);
 	if (ctrl != NULL)
 		ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
+	/* effective gain: x HCG factor at the top when the factor is known */
 	ctrl = v4l2_ctrl_new_std(handler, ops, V4L2_CID_GAIN, 1 << 4,
+				 hcg_factor ? (s64)IMX327_GAIN_Q4_MAX * hcg_factor / 1000 :
 				 IMX327_GAIN_Q4_MAX, 1, 1 << 4);
 	if (ctrl != NULL)
 		ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_EXECUTE_ON_WRITE;
@@ -1241,6 +1314,7 @@ static int sensor_probe(struct i2c_client *client)
 	imx327_base_vts = sensor_win_sizes[0].vts;
 	imx327_vts = imx327_base_vts;
 	imx327_gain_reg = 0;
+	imx327_hcg = hcg == 1;
 
 	return 0;
 }

@@ -61,9 +61,20 @@ Modules `imx327_mipi`, `imx462_mipi` (package `imx327-mipi`). 2 lanes.
   `ROI Height`): WINMODE window + WINPV, moved live under REGHOLD. **Drop the
   2 frames after a move** (N+1 old position, N+2 over-exposed transition).
   The line duration does not depend on the width: crop X in software.
+- **LCG/HCG** (FDG_SEL, 0x3009 bit 4): `V4L2_CID_GAIN` is the effective gain
+  in LCG units; in automatic mode (`hcg=2`, default) the driver switches to
+  HCG from ×3 (`hcg_gain`), gain register = effective / HCG factor, FDG_SEL
+  and gain written under REGHOLD (same frame). IMX327 (Innomaker module):
+  **HCG/LCG = 2.535** at every register (±0.2 %, measured on pixels that never
+  saturate — a partly saturated scene gave a wrong 2.08), gain law exactly
+  0.3 dB/step, no step at the switch, **about 26 % less read noise in HCG** at
+  the same effective gain (×2.5 to ×32), full well about 2.5× lower.
+  IMX462: factor not measured, stays in LCG (`hcg_factor=0`). Read-only
+  control "HCG Active" 0x00982906, as on the IMX585.
 - Parameters: `mipi_891` (change only while not streaming), `inck`
-  (74250000 default, or 37125000), `hcg_mode`, `black_level`, `test_pattern`
-  (1–7), `isp_ae`.
+  (74250000 default, or 37125000), `hcg` (0 LCG, 1 HCG, 2 automatic),
+  `hcg_gain`, `hcg_factor` (×1000, set at load), `black_level`,
+  `test_pattern` (1–7), `isp_ae`.
 
 ## IMX477 — `drivers/imx477`
 
