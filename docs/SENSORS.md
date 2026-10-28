@@ -71,9 +71,16 @@ Modules `imx327_mipi`, `imx462_mipi` (package `imx327-mipi`). 2 lanes.
   the same effective gain (×2.5 to ×32), full well about 2.5× lower.
   IMX462: factor not measured, stays in LCG (`hcg_factor=0`). Read-only
   control "HCG Active" 0x00982906, as on the IMX585.
+- **Orientation**: `flip` parameter (bit 0 horizontal = HREV, bit 1
+  vertical = VREV of 0x3007; 3 = 180°), taken at the next stream on (can be
+  changed in `/sys/module/imx327_mipi/parameters/flip` without reloading).
+  Measured on the IMX327: **Bayer stays RGGB in all four orientations** (the
+  sensor shifts its readout by one pixel), and `Crop Y Offset` changes sign
+  under a vertical flip so that positive still moves the band down in the
+  image.
 - Parameters: `mipi_891` (change only while not streaming), `inck`
   (74250000 default, or 37125000), `hcg` (0 LCG, 1 HCG, 2 automatic),
-  `hcg_gain`, `hcg_factor` (×1000, set at load), `black_level`,
+  `hcg_gain`, `hcg_factor` (×1000, set at load), `flip`, `black_level`,
   `test_pattern` (1–7), `isp_ae`.
 
 ## IMX477 — `drivers/imx477`
@@ -96,7 +103,10 @@ Module `imx477_mipi` (package `imx477-mipi`). 2 lanes at 900 Mbit/s
 
 - RAW12 for native modes, RAW10 when a binned format is requested.
 - `flip=3` (default): readout rotated 180°, Bayer **BGGR**, same orientation
-  as libcamera on the Pi.
+  as libcamera on the Pi. Unlike the STARVIS sensors, the Bayer order follows
+  the flip (0..3: RGGB, GRBG, GBRG, BGGR, as the Pi driver) while the format
+  stays SBGGR: derive the order from `flip` in the application (not yet
+  measured on the A7S).
 - Crop X/Y step 4, live, 0 dropped frame; the new position shows 2 frames
   later. In 12-bit the line length follows the MIPI rate
   (`width × 12 × 840/1800 + 500`, at least 5 932): narrowing below ~1200 px
@@ -149,11 +159,15 @@ IMX585 (Soho Enterprise module, 24 MHz), 891 Mbit/s per lane, 0 dropped frame:
 - Link: **891 Mbit/s per lane is the practical limit** on this board: 1188
   gave corrupted frames whatever the D-PHY settle time, 1440 no frame
   (`link_mbps` accepts them, for other boards).
+- **Orientation**: `flip` parameter (bit 0 = WINMODEH 0x3020, bit 1 =
+  WINMODEV 0x3021; 3 = 180°), taken at the next stream on; Crop X/Y offsets
+  change sign on a flipped axis. Will Whang's drivers report the same Bayer
+  code whatever the flip; **not measured yet** on these sensors.
 - Parameters: `lanes` (2/4), `link_mbps`, `inck` (24 MHz default), `hcg`,
-  `hcg_gain`, `hdr_gain`, `hdr_blend`, `black_level`, `vmargin`, `hmax_min`,
-  `isp_ae`. Change `lanes`/`link_mbps` only while not streaming.
+  `hcg_gain`, `hdr_gain`, `hdr_blend`, `flip`, `black_level`, `vmargin`,
+  `hmax_min`, `isp_ae`. Change `lanes`/`link_mbps` only while not streaming.
 
 IMX678 / IMX662 checklist when you first connect one: `dmesg` (BLKLEVEL read
 back = 50), all lanes `HS_S ok`, measured frame rates equal to the computed
 ones (otherwise the module oscillator differs: `inck`), Bayer order on a real
-image, then 4 lanes, HCG factor, readout floor.
+image (also after each `flip`), then 4 lanes, HCG factor, readout floor.

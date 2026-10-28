@@ -42,7 +42,8 @@
  *  - check if the VIN needs time_hs / combo_mode for 445.5 Mbit/s;
  *  - check hoffset/voffset: this driver outputs exactly WxH (mainline style,
  *    X_OUT_SIZE/Y_OUT_SIZE), Allwinner's imx307 outputs 1948x1097 and crops;
- *  - flips (0x3007 bits 0/1) not exposed yet: check Bayer order after flip;
+ *  - flip parameter (0x3007 HREV/VREV, 2026-10-28): RGGB kept in all four
+ *    orientations (the sensor shifts its readout), measured on the board;
  *  - check that the VIN tolerates HMAX changes while streaming (long poses).
  */
 
@@ -91,6 +92,8 @@ MODULE_LICENSE("GPL");
 #define IMX327_CTRL_07		0x3007	/* WINMODE[6:4], HREV[1], VREV[0] */
 #define IMX327_WINMODE_1080P	(0 << 4)
 #define IMX327_WINMODE_CROP	(4 << 4)
+#define IMX327_VREVERSE		BIT(0)
+#define IMX327_HREVERSE		BIT(1)
 #define IMX327_WINPV		0x303c	/* 16 bits LE: first row of the window */
 #define IMX327_WINWV		0x303e	/* 16 bits LE: rows of the window */
 #define IMX327_Y_OUT_SIZE	0x3418	/* 16 bits LE */
@@ -209,6 +212,15 @@ module_param(isp_ae, bool, 0664);
 MODULE_PARM_DESC(isp_ae, "Accept exposure/gain requests from the ISP 3A (VIDIOC_VIN_SENSOR_EXP_GAIN); off = manual RAW control only");
 
 static bool mipi_891;	/* set through mipi_891_ops, after the mode table */
+
+/*
+ * Readout orientation, as the A7S IMX477 driver: bit 0 horizontal (HREV),
+ * bit 1 vertical (VREV), 3 = 180 degrees (sensor mounted upside down,
+ * telescope or diagonal mirror). Taken at the next stream on.
+ */
+static uint flip;
+module_param(flip, uint, 0664);
+MODULE_PARM_DESC(flip, "Readout orientation: bit 0 horizontal, bit 1 vertical (3 = 180 degrees); taken at the next stream on");
 
 static uint test_pattern;
 module_param(test_pattern, uint, 0664);
@@ -928,6 +940,13 @@ static struct sensor_win_size sensor_win_sizes[] = {
 static bool imx327_streaming;
 static int imx327_crop_y;	/* rows from the centred band position */
 
+/* WINMODE plus the flip bits: 0x3007 is always written whole. */
+static unsigned int imx327_ctrl_07(unsigned int winmode)
+{
+	return winmode | (flip & 1 ? IMX327_HREVERSE : 0) |
+	       (flip & 2 ? IMX327_VREVERSE : 0);
+}
+
 /*
  * Bands (height < 1080): window cropping mode, rows placed by WINPV. While
  * streaming only WINPV may be rewritten: rewriting WINMODE/WINWV there too
@@ -937,7 +956,8 @@ static int imx327_crop_y;	/* rows from the centred band position */
 static int imx327_write_window(struct v4l2_subdev *sd, const struct sensor_win_size *w,
 			       bool live)
 {
-	int pv = ((int)IMX327_ROWS - (int)w->height) / 2 + imx327_crop_y;
+	int off = flip & 2 ? -imx327_crop_y : imx327_crop_y;
+	int pv = ((int)IMX327_ROWS - (int)w->height) / 2 + off;
 	int ret;
 
 	if (w->height >= IMX327_ROWS)
@@ -945,7 +965,7 @@ static int imx327_write_window(struct v4l2_subdev *sd, const struct sensor_win_s
 	pv = clamp_t(int, pv, 0, IMX327_ROWS - w->height) & ~1;
 	ret = sensor_write(sd, IMX327_REGHOLD, 0x01);
 	if (!live) {
-		ret |= sensor_write(sd, IMX327_CTRL_07, IMX327_WINMODE_CROP);
+		ret |= sensor_write(sd, IMX327_CTRL_07, imx327_ctrl_07(IMX327_WINMODE_CROP));
 		ret |= sensor_write(sd, IMX327_WINWV, (w->height + IMX327_WINWV_MARGIN) & 0xff);
 		ret |= sensor_write(sd, IMX327_WINWV + 1, (w->height + IMX327_WINWV_MARGIN) >> 8);
 	}
@@ -1055,7 +1075,7 @@ static int sensor_reg_init(struct sensor_info *info)
 	if (wsize->set_size)
 		wsize->set_size(sd);
 
-	sensor_write(sd, IMX327_CTRL_07, IMX327_WINMODE_1080P);
+	sensor_write(sd, IMX327_CTRL_07, imx327_ctrl_07(IMX327_WINMODE_1080P));
 	sensor_write(sd, IMX327_Y_OUT_SIZE, wsize->height & 0xff);
 	sensor_write(sd, IMX327_Y_OUT_SIZE + 1, wsize->height >> 8);
 	imx327_write_window(sd, wsize, false);
@@ -1088,9 +1108,9 @@ static int sensor_reg_init(struct sensor_info *info)
 	msleep(30);
 	sensor_write(sd, IMX327_XMSTA, 0x00);
 
-	sensor_print("s_fmt set width = %d, height = %d, hmax = %u, vts = %u, inck = %u, mipi %s Mbit/s, crop y %d\n",
+	sensor_print("s_fmt set width = %d, height = %d, hmax = %u, vts = %u, inck = %u, mipi %s Mbit/s, crop y %d, flip %u\n",
 		     wsize->width, wsize->height, imx327_hmax, imx327_vts, inck,
-		     mipi_891 ? "891" : "445.5", imx327_crop_y);
+		     mipi_891 ? "891" : "445.5", imx327_crop_y, flip & 3);
 
 	return 0;
 }

@@ -23,6 +23,9 @@
  * RAW10 for binned modes, RAW12 otherwise). Readout rotated 180 degrees by
  * default (flip=3), as libcamera does for the HQ camera on the Pi, so the
  * Bayer order is BGGR and images are oriented as with Multicam on the Pi.
+ * Other flips change the order as on the Pi (flip 0..3: RGGB, GRBG, GBRG,
+ * BGGR) but the format stays SBGGR: the application derives the order from
+ * the flip parameter (Multicam: SensorProfile.flip_bayer).
  *
  * Exposure: same unit as every A7S driver, lines of 29.63 us in Q4 (16 = one
  * line of HMAX 4400 at 148.5 MHz), converted here to lines of LINE_LENGTH at

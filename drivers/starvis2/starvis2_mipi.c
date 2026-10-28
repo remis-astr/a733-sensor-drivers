@@ -55,6 +55,13 @@
  * Applied at stream start and live while streaming (PIX_HST/PIX_VST under
  * REGHOLD, as RpiCamera3's driver). No effect on full-field modes.
  *
+ * Orientation (2026-10-28): parameter "flip" (bit 0 horizontal = WINMODEH
+ * 0x3020, bit 1 vertical = WINMODEV 0x3021, 3 = 180 degrees, as the A7S
+ * IMX327/IMX477 drivers), written at stream on; the crop offsets change sign
+ * on a flipped axis so that positive stays right/down in the image. Will's
+ * drivers report the same Bayer code whatever the flip (sensor shifts its
+ * readout, as measured on the IMX327): to check on each sensor.
+ *
  * TO VALIDATE ON HARDWARE (nothing here has run yet):
  *  - crop timing: VMAX = height + the full frame's vertical blanking, HMAX
  *    scaled to the cropped width (link budget), floored at hmax_min (the
@@ -176,6 +183,8 @@ MODULE_LICENSE("GPL");
 #define SV2_BIN_MODE		0x3019	/* 0 = colour */
 #define SV2_ADDMODE		0x301b	/* 1 = 2x2 binning */
 #define SV2_FDG_SEL0		0x3030	/* 1 = HCG */
+#define SV2_WINMODEH		0x3020	/* bit 0: horizontal flip */
+#define SV2_WINMODEV		0x3021	/* bit 0: vertical flip */
 #define SV2_PIX_HST		0x303c
 #define SV2_PIX_HWIDTH		0x303e
 #define SV2_LANEMODE		0x3040
@@ -250,6 +259,10 @@ MODULE_PARM_DESC(black_level, "BLKLEVEL register (default 50, Will Whang's drive
 static bool isp_ae;
 module_param(isp_ae, bool, 0664);
 MODULE_PARM_DESC(isp_ae, "Accept exposure/gain requests from the ISP 3A; off = manual RAW control only");
+
+static uint flip;
+module_param(flip, uint, 0664);
+MODULE_PARM_DESC(flip, "Readout orientation: bit 0 horizontal, bit 1 vertical (3 = 180 degrees); taken at the next stream on");
 
 static uint vmargin = SV2_VMAX_FULL - SV2_ACTIVE_H;	/* set through timing_ops */
 static uint hmax_min = SV2_HMAX_MIN;			/* idem */
@@ -836,12 +849,14 @@ static unsigned int sv2_crop_start(unsigned int origin, unsigned int size,
 
 static unsigned int sv2_hst(const struct sv2_mode *m)
 {
-	return sv2_crop_start(CROP_HST0, sv2_mode_win_w(m), SV2_ACTIVE_W, sv2_crop_x);
+	return sv2_crop_start(CROP_HST0, sv2_mode_win_w(m), SV2_ACTIVE_W,
+			      flip & 1 ? -sv2_crop_x : sv2_crop_x);
 }
 
 static unsigned int sv2_vst(const struct sv2_mode *m)
 {
-	return sv2_crop_start(CROP_VST0, sv2_mode_win_h(m), SV2_ACTIVE_H, sv2_crop_y);
+	return sv2_crop_start(CROP_VST0, sv2_mode_win_h(m), SV2_ACTIVE_H,
+			      flip & 2 ? -sv2_crop_y : sv2_crop_y);
 }
 
 /* Move the window while streaming */
@@ -910,6 +925,8 @@ static int sensor_reg_init(struct sensor_info *info)
 	ret |= sensor_write(sd, SV2_XXS_DRV, 0x00);
 	ret |= sensor_write(sd, SV2_XXS_OUTSEL, 0x0a);
 	ret |= sv2_write_window(sd, m);
+	ret |= sensor_write(sd, SV2_WINMODEH, flip & 1);
+	ret |= sensor_write(sd, SV2_WINMODEV, (flip >> 1) & 1);
 	ret |= sensor_write(sd, SV2_DIGITAL_CLAMP, 0x00);
 	if (ret)
 		return -EIO;
@@ -941,10 +958,10 @@ static int sensor_reg_init(struct sensor_info *info)
 	sensor_write(sd, SV2_STANDBY, 0x00);
 	msleep(25);	/* Will's STREAM_DELAY */
 
-	sensor_print("s_fmt %ux%u%s%s%s, hmax %u, vmax %u, %u lanes x %u Mbit/s, inck %u, window %u,%u\n",
+	sensor_print("s_fmt %ux%u%s%s%s, hmax %u, vmax %u, %u lanes x %u Mbit/s, inck %u, window %u,%u, flip %u\n",
 		     wsize->width, wsize->height, m->binned ? " binned" : "",
 		     m->roi ? " roi" : "", sv2_hdr ? " clear-hdr" : "", sv2_hmax, sv2_vts, lanes, link_mbps, inck,
-		     sv2_hst(m), sv2_vst(m));
+		     sv2_hst(m), sv2_vst(m), flip & 3);
 	return 0;
 }
 
