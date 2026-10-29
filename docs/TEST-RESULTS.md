@@ -115,6 +115,16 @@ Exposure linear (÷4 → ÷4.0, ×2 → ×2.0).
   3.02 for a software 2×2 average).
 - ClearHDR curve measured with a √2 exposure ramp (see SENSORS.md).
 
+## IMX678 (Soho Enterprise SE678MBD-C)
+
+- 2 and 4 lanes at 891 Mbit/s, test pattern exact on every row in every
+  mode, rates = model to 0.1 fps: 4 lanes 4K 30.0, 1916×1080 115.4,
+  1280×720 166.7, 640×480 236.9, binned 30.0 fps.
+- Bayer RGGB (grey-world check on a blue wall), unchanged by `flip`.
+- HCG factor 2.48; automatic switch at ×8 checked (HCG Active 0 → 1).
+- Binning = digital 2×2 average ×2 (S/N 19.0 binned vs 19.1 software).
+- Row banding at high gain, under investigation (see SENSORS.md).
+
 ## Frame access from the CPU
 
 V4L2 **MMAP buffers of the VIN are uncached**: copying a 1080p frame (4.15 MB)

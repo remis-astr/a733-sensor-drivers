@@ -120,7 +120,7 @@ Module `imx477_mipi` (package `imx477-mipi`). 2 lanes at 900 Mbit/s
 
 Modules `imx585_mipi`, `imx678_mipi`, `imx662_mipi` (package `starvis2-mipi`).
 Shared register map; init tables extracted unchanged from Will Whang's
-drivers. **Only the IMX585 has been tested.**
+drivers. **Tested: IMX585 and IMX678** (IMX662 not yet).
 
 IMX585 (Soho Enterprise module, 24 MHz), 891 Mbit/s per lane, 0 dropped frame:
 
@@ -138,15 +138,18 @@ IMX585 (Soho Enterprise module, 24 MHz), 891 Mbit/s per lane, 0 dropped frame:
   lines); `PIX_VST` aligned on 4.
 - **Readout floor**: HMAX 480 on the IMX585 (measured, ~7 % margin; below
   420 the readout breaks: the frame rate collapses and the signal is wrong);
-  550 kept for the IMX678/662 until measured (`hmax_min`).
+  550 kept for the IMX678/662 (`hmax_min`): the IMX678 binned mode kept its
+  frame rate down to 450, but the signal check needs a steady light.
 - **Binning** on the IMX585 is a digital 2×2 average on the chip (same
   signal as 4K, half the noise, exactly like a software 2×2 average: no
   read-noise gain). Fast binned mode: HMAX = full frame / 4.
 - **LCG/HCG**: `V4L2_CID_GAIN` is the effective gain in LCG units; in
   automatic mode (`hcg=2`, default on the IMX585) the driver switches to HCG
   from ×19 (analog = effective / 5.85, register ≥ 34). HCG/LCG factor 5.85
-  measured, no step at the switch, linear to ×374 within ±3 %. Read-only
-  control "HCG Active" 0x00982906.
+  measured, no step at the switch, linear to ×374 within ±3 %. **IMX678**:
+  factor 2.48 (2.508 / 2.490 / 2.454 at registers 34 / 40 / 46), automatic
+  HCG from ×8, effective gain up to ×159 (continuity at the switch not
+  checked yet). Read-only control "HCG Active" 0x00982906.
 - **ClearHDR** (IMX585): `V4L2_CID_WIDE_DYNAMIC_RANGE`, refused while
   streaming. 16-bit linear output is impossible on the A733 (the capture path
   goes through the TDM, which takes 8/10/12 bits only), so the driver uses the
@@ -162,12 +165,37 @@ IMX585 (Soho Enterprise module, 24 MHz), 891 Mbit/s per lane, 0 dropped frame:
 - **Orientation**: `flip` parameter (bit 0 = WINMODEH 0x3020, bit 1 =
   WINMODEV 0x3021; 3 = 180°), taken at the next stream on; Crop X/Y offsets
   change sign on a flipped axis. Will Whang's drivers report the same Bayer
-  code whatever the flip; **not measured yet** on these sensors.
+  code whatever the flip; **IMX678 measured: RGGB in all four orientations**,
+  image direction and crop offsets correct.
 - Parameters: `lanes` (2/4), `link_mbps`, `inck` (24 MHz default), `hcg`,
   `hcg_gain`, `hdr_gain`, `hdr_blend`, `flip`, `black_level`, `vmargin`,
   `hmax_min`, `isp_ae`. Change `lanes`/`link_mbps` only while not streaming.
+  `link_mbps` also accepts **594 and 720** (DATARATE_SEL 0x07 / 0x06, HMAX
+  scaled from the 891 value) for marginal cables; applied by the IMX678, not
+  validated with frames (a bad contact was not helped by them).
 
-IMX678 / IMX662 checklist when you first connect one: `dmesg` (BLKLEVEL read
+### IMX678 (Soho Enterprise SE678MBD-C)
+
+- **Module supply**: this module takes 5 V on two extra wires besides the
+  22-pin cable. It must be powered **before or with the board** (the driver
+  probes ~13 s after power-on; a module powered later answers on I2C but has
+  no `/dev/video0` until the next power cycle) and **never plugged hot** (the
+  inrush took the board down twice). Fed from the 40-pin header (pins 2/4 =
+  `VCC5V0_SYS`, ground 6) through a fixed 5 V LDO, which is in dropout there.
+- 24 MHz oscillator; frame rates equal to the model in every mode on 2 and 4
+  lanes; IMX585 test-pattern registers valid.
+- 2 lanes: 4K 15.0 · 1916×1080 57.7 · 720p 124.9 · 640×480 236.9 · binned
+  15.0 fps. 4 lanes: 30.0 · 115.4 · 166.7 · 236.9 · 30.0 fps.
+- Binning: binned signal ×2.04 the native one, same noise: digital 2×2
+  average ×2, same S/N as a software 2×2 average.
+- **Row banding** in the dark at high gain (LCG and HCG): row-mean noise
+  20–25× pure noise, about half the noise variance, same at a 1-line
+  exposure (not light flicker). Suspected cause: the module supply (LDO in
+  dropout); to be measured again with a proper supply.
+- Cable held by Kapton on the board connector (no latch on this board):
+  clock and D0 in HS but D1 in error = contact.
+
+IMX662 checklist when you first connect one: `dmesg` (BLKLEVEL read
 back = 50), all lanes `HS_S ok`, measured frame rates equal to the computed
 ones (otherwise the module oscillator differs: `inck`), Bayer order on a real
 image (also after each `flip`), then 4 lanes, HCG factor, readout floor.

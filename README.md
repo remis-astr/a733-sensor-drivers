@@ -18,7 +18,7 @@ was developed and measured on one Cubie A7S (4 GB) between 2026-10-10 and
 | IMX462 | — | ⚠️ built, not tested | same driver as IMX327 | same modes as IMX327, gain up to 72 dB |
 | **IMX477** | Raspberry Pi HQ Camera | ✅ validated | 2 × 900 Mbit/s | 4056×3040 · 2028×1520 binned 38.4 · 1916×1080 65.6 · 1920×1080 binned 77.9 · 1276×720 140.8 · 848×480 262.2 · 640×480 binned 446.4 · free ROI (256×128: 804 fps) |
 | **IMX585** | Soho Enterprise IMX585 | ✅ validated | **4** × 891 Mbit/s | 3840×2160 30.0 · 1916×1080 115.4 · 1280×720 191.0 · 640×480 271.4 · binned 1920×1080 68.7 · free ROI (256×128: 710 fps) · automatic LCG/HCG · ClearHDR (12-bit compressed) |
-| IMX678 | — | ⚠️ built, not tested | 2 or 4 lanes | same code as IMX585 (STARVIS 2 family) |
+| **IMX678** | Soho Enterprise SE678MBD-C | ✅ validated | **4** × 891 Mbit/s | 3840×2160 30.0 · 1916×1080 115.4 · 1280×720 166.7 · 640×480 236.9 · binned 1920×1080 30.0 · automatic LCG/HCG (×2.48) · Bayer RGGB in all four flips · row banding at high gain under investigation (module supply) |
 | IMX662 | — | ⚠️ built, not tested | 2 or 4 lanes | same code as IMX585 |
 
 All drivers: RAW12 (RAW10 for the IMX477 binned modes), exposure and gain on
@@ -116,7 +116,8 @@ VIN : paquets DKMS, overlays, scripts d'installation, outils de test et
 résultats de mesure. **Validés** : IMX327 (Innomaker, 1080p à 60 i/s, poses
 jusqu'à 115 s), IMX477 (caméra HQ Raspberry Pi, 12 Mpx, recadrages jusqu'à
 800 i/s), IMX585 (Soho Enterprise, 4 voies : 4K à 30 i/s, HCG automatique,
-ClearHDR). **Écrits mais non testés** : IMX462, IMX678, IMX662.
+ClearHDR), IMX678 (Soho Enterprise, 4 voies : 4K à 30 i/s, HCG automatique dès ×8).
+**Écrits mais non testés** : IMX462, IMX662.
 
 Points essentiels :
 - **I2C de la caméra** : l'overlay d'origine de Radxa met PE3/PE4 (TWI3) à

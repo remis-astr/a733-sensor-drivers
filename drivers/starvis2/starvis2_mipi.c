@@ -72,7 +72,8 @@
  *  - whether stream off (STANDBY) puts the MIPI clock lane back to LP-11
  *    (the IMX327 needed a software reset for the A733 receiver; here the
  *    module power is cycled by PE8 at each open of /dev/video0);
- *  - 1188 / 1440 Mbit/s on the A733 receiver (only 891 is validated).
+ *  - 1188 / 1440 Mbit/s on the A733 receiver (only 891 is validated);
+ *    594 / 720 for marginal cables (DATARATE_SEL codes of the IMX585).
  */
 
 #include "utility/vin_log.h"
@@ -111,6 +112,8 @@ MODULE_LICENSE("GPL");
 /* HCG / LCG sensitivity x1000, measured 2026-10-20 (RpiCamera3,
  * tools/measure_imx585_hcg.py); 0 = unknown, no automatic switch */
 #define SV2_HCG_FACTOR_MILLI	5850
+/* automatic HCG from x19 = lowest HCG analog gain (x3.24) x 5.85 */
+#define SV2_HCG_GAIN		19
 #define SV2_HAS_CLEARHDR	1
 /* Lowest HMAX of the readout, measured 2026-10-23 (4 lanes): 450 good, 420
  * and below wrong signal / frame-rate collapse; 480 keeps ~7 % margin */
@@ -127,7 +130,10 @@ MODULE_LICENSE("GPL");
 #define SV2_VMAX_FULL		2250
 #define SV2_HAS_BINNING		1
 #define SV2_HMAX_4L		{1100, 792, 660}
-#define SV2_HCG_FACTOR_MILLI	0
+/* HCG / LCG x1000, measured 2026-10-30 (tools/starvis2/bench.py hcg:
+ * 2.508 / 2.490 / 2.454 at registers 34 / 40 / 46); HCG from x8 = x3.24 x 2.48 */
+#define SV2_HCG_FACTOR_MILLI	2480
+#define SV2_HCG_GAIN		8
 #elif defined(STARVIS2_IMX662)
 #define SENSOR_NAME		"imx662_mipi"
 #define SENSOR_LABEL		"IMX662"
@@ -139,6 +145,7 @@ MODULE_LICENSE("GPL");
 #define SV2_HAS_BINNING		0
 #define SV2_HMAX_4L		{990, 660, 660}
 #define SV2_HCG_FACTOR_MILLI	0
+#define SV2_HCG_GAIN		19
 #else
 #error "define STARVIS2_IMX585, STARVIS2_IMX678 or STARVIS2_IMX662"
 #endif
@@ -238,11 +245,11 @@ static uint lanes = 2;		/* idem: 2 or 4 MIPI data lanes */
  */
 static uint hcg = SV2_HCG_FACTOR_MILLI ? 2 : 0;
 module_param(hcg, uint, 0664);
-MODULE_PARM_DESC(hcg, "Conversion gain: 0 = LCG, 1 = HCG (gain register >= 34), 2 = automatic from hcg_gain (default on the IMX585, the only one measured)");
+MODULE_PARM_DESC(hcg, "Conversion gain: 0 = LCG, 1 = HCG (gain register >= 34), 2 = automatic from hcg_gain (default on the sensors with a measured HCG factor: IMX585, IMX678)");
 
-static uint hcg_gain = 19;
+static uint hcg_gain = SV2_HCG_GAIN;
 module_param(hcg_gain, uint, 0664);
-MODULE_PARM_DESC(hcg_gain, "Automatic mode: effective gain (x) from which HCG is used (default 19, the lowest HCG analog gain x HCG factor)");
+MODULE_PARM_DESC(hcg_gain, "Automatic mode: effective gain (x) from which HCG is used (default: the lowest HCG analog gain x HCG factor, 19 on the IMX585, 8 on the IMX678)");
 
 static uint hdr_gain = 2;
 module_param(hdr_gain, uint, 0664);
@@ -394,9 +401,19 @@ static struct sv2_mode *sv2_mode_of(struct sensor_win_size *w)
 	return &sv2_modes[w - sensor_win_sizes];
 }
 
+/* MIPI rates per lane and their DATARATE_SEL codes; below 891 the
+ * minimum HMAX is the 891 one scaled by the rate */
+static const unsigned int sv2_rates[] = {594, 720, 891, 1188, 1440};
+static const u8 sv2_datarate[] = {0x07, 0x06, 0x05, 0x04, 0x03};
+#define SV2_RATE_891	2
+
 static int sv2_rate_index(void)
 {
-	return link_mbps >= 1440 ? 2 : link_mbps >= 1188 ? 1 : 0;
+	int i = ARRAY_SIZE(sv2_rates) - 1;
+
+	while (i > 0 && link_mbps < sv2_rates[i])
+		i--;
+	return i;
 }
 
 /*
@@ -414,8 +431,12 @@ static unsigned int sv2_win_width(const struct sv2_mode *m)
 static unsigned int sv2_mode_hmax(const struct sv2_mode *m)
 {
 	static const unsigned int hmax_4l[] = SV2_HMAX_4L;
-	unsigned int full = hmax_4l[sv2_rate_index()] * (lanes == 4 ? 1 : 2);
+	int r = sv2_rate_index();
+	unsigned int full = r >= SV2_RATE_891 ? hmax_4l[r - SV2_RATE_891] :
+		DIV_ROUND_UP(hmax_4l[0] * 891, sv2_rates[r]);
 	unsigned int h;
+
+	full *= lanes == 4 ? 1 : 2;
 
 	/*
 	 * Binned: the sensor still reads the whole array, but averages 2x2 in
@@ -453,10 +474,9 @@ static int sv2_crop_x, sv2_crop_y;	/* image pixels from the centred window */
 
 static void sv2_update_timing(void)
 {
-	static const unsigned int mbps[] = {891, 1188, 1440};
 	int i;
 
-	link_mbps = mbps[sv2_rate_index()];
+	link_mbps = sv2_rates[sv2_rate_index()];
 	lanes = lanes == 4 ? 4 : 2;
 	for (i = 0; i < N_WIN_SIZES; i++) {
 		struct sensor_win_size *w = &sensor_win_sizes[i];
@@ -488,7 +508,7 @@ static const struct kernel_param_ops sv2_timing_ops = {
 	.get = param_get_uint,
 };
 module_param_cb(link_mbps, &sv2_timing_ops, &link_mbps, 0664);
-MODULE_PARM_DESC(link_mbps, "MIPI rate per lane: 891 (default, validated on the A733 with the IMX327), 1188, 1440; change only while not streaming");
+MODULE_PARM_DESC(link_mbps, "MIPI rate per lane: 594, 720 (marginal cables), 891 (default, validated on the A733 with the IMX327), 1188, 1440; change only while not streaming");
 module_param_cb(lanes, &sv2_timing_ops, &lanes, 0664);
 MODULE_PARM_DESC(lanes, "MIPI data lanes: 2 (default) or 4 (the A7S connector and the A733 mipi1 port have 4; the 22-pin cable must carry D2/D3); change only while not streaming");
 module_param_cb(vmargin, &sv2_timing_ops, &vmargin, 0664);
@@ -900,7 +920,6 @@ static int sensor_reg_init(struct sensor_info *info)
 		{74250000, 0x00}, {37125000, 0x01}, {72000000, 0x02},
 		{27000000, 0x03}, {24000000, 0x04},
 	};
-	static const u8 datarate[] = {0x05, 0x04, 0x03};	/* 891, 1188, 1440 */
 	struct v4l2_subdev *sd = &info->sd;
 	struct sensor_win_size *wsize = info->current_wins;
 	struct sv2_mode *m = sv2_mode_of(wsize);
@@ -918,7 +937,7 @@ static int sensor_reg_init(struct sensor_info *info)
 		return ret;
 	ret = sensor_write(sd, SV2_INCK_SEL, inck_sel);
 	ret |= sv2_write16(sd, SV2_BLKLEVEL, black_level);
-	ret |= sensor_write(sd, SV2_DATARATE_SEL, datarate[sv2_rate_index()]);
+	ret |= sensor_write(sd, SV2_DATARATE_SEL, sv2_datarate[sv2_rate_index()]);
 	ret |= sensor_write(sd, SV2_LANEMODE, lanes == 4 ? 0x03 : 0x01);
 	/* internal sync leader: XVS/XHS outputs (Will's SYNC_INT_LEADER) */
 	ret |= sensor_write(sd, SV2_EXTMODE, 0x00);
