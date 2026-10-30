@@ -26,6 +26,12 @@
  * here to lines of the current HMAX (HMAX / 74.25 MHz; at 891 Mbit/s the
  * full-width HMAX is 2200, i.e. exactly that unit). Poses longer than the
  * frame stretch VMAX (20 bits), then HMAX, as in imx327_mipi.c.
+ * Poses that last at least a frame of HMAX hmax_slow (default 4400) are
+ * read at that HMAX instead of the mode's: the frame lasts as long as the
+ * pose either way (no rate is lost), and on the IMX678 the row banding of
+ * a dark frame drops from 11-14 to 4-4.5 ADU at x16 (4 lanes; HMAX 2750 to
+ * 4400 all good, 4180/4620 and above 4950 not: measured 2026-10-30,
+ * per-pixel noise unchanged).
  *
  * Modes:
  *  - IMX585 / IMX678: 1920x1080 2x2 binned (full field; IMX585: digital
@@ -273,6 +279,9 @@ MODULE_PARM_DESC(flip, "Readout orientation: bit 0 horizontal, bit 1 vertical (3
 
 static uint vmargin = SV2_VMAX_FULL - SV2_ACTIVE_H;	/* set through timing_ops */
 static uint hmax_min = SV2_HMAX_MIN;			/* idem */
+static uint hmax_slow = 4400;
+module_param(hmax_slow, uint, 0664);
+MODULE_PARM_DESC(hmax_slow, "HMAX for poses lasting at least a frame at that HMAX (less row banding, same frame time); 0 = always the mode's HMAX; taken at the next exposure change");
 
 /* ------------------------------------------------------------------------
  * Register tables
@@ -543,11 +552,22 @@ static int sensor_s_exp(struct v4l2_subdev *sd, unsigned int exp_val)
 	struct sensor_info *info = to_state(sd);
 	struct sensor_win_size *wsize = info->current_wins;
 	unsigned int base_h = wsize ? wsize->hts : sensor_win_sizes[0].hts;
-	unsigned int lines, eff, hmax, vmax;
+	unsigned int lines, eff, hmax, vmax, base_vts = sv2_base_vts;
 	int ret;
 
 	if (exp_val > SV2_EXP_LINES_MAX << 4)
 		exp_val = SV2_EXP_LINES_MAX << 4;
+	/* long pose: read at hmax_slow if the frame is the pose's length anyway */
+	if (hmax_slow > base_h && !sv2_hdr && wsize) {
+		unsigned int slow = DIV_ROUND_CLOSEST_ULL((u64)exp_val * SV2_HMAX_NOMINAL, 16 * hmax_slow);
+		unsigned int vts = max_t(unsigned int, wsize->vts,
+					 DIV_ROUND_UP(sv2_base_vts * base_h, hmax_slow));
+
+		if (slow + sv2_shr_min >= vts) {
+			base_h = hmax_slow;
+			base_vts = vts;
+		}
+	}
 	lines = DIV_ROUND_CLOSEST_ULL((u64)exp_val * SV2_HMAX_NOMINAL, 16 * base_h);
 	if (lines < SV2_EXP_MIN)
 		lines = SV2_EXP_MIN;
@@ -555,7 +575,7 @@ static int sensor_s_exp(struct v4l2_subdev *sd, unsigned int exp_val)
 	if (lines + sv2_shr_min <= SV2_VMAX_MAX) {
 		hmax = base_h;
 		eff = lines;
-		vmax = max(sv2_base_vts, eff + sv2_shr_min);
+		vmax = max(base_vts, eff + sv2_shr_min);
 	} else {
 		hmax = DIV_ROUND_UP_ULL((u64)lines * base_h, SV2_VMAX_MAX - sv2_shr_min);
 		if (hmax > SV2_HMAX_MAX)
