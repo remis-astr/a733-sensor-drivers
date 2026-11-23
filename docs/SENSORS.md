@@ -192,8 +192,7 @@ IMX585 (Soho Enterprise module, 24 MHz), 891 Mbit/s per lane, 0 dropped frame:
   20–25× pure noise, about half the noise variance, same at a 1-line
   exposure (not light flicker). Suspected cause: the module supply (LDO in
   dropout); to be measured again with a proper supply.
-- Cable held by Kapton on the board connector (no latch on this board):
-  clock and D0 in HS but D1 in error = contact.
+
 
 IMX662 checklist when you first connect one: `dmesg` (BLKLEVEL read
 back = 50), all lanes `HS_S ok`, measured frame rates equal to the computed
